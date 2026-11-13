@@ -1,0 +1,1083 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Распознавание одноклассников</title>
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root {
+  --bg-1: #0a0416; --bg-2: #1a0b2e;
+  --purple-1: #7c3aed; --purple-2: #a855f7; --purple-3: #c084fc;
+  --text: #f5f3ff; --muted: #c4b5fd;
+  --card: rgba(30, 18, 60, .55); --card-border: rgba(168, 85, 247, .22);
+  --ok: #34d399; --danger: #f43f5e; --warn: #fbbf24;
+}
+* { box-sizing: border-box; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+html, body { margin: 0; padding: 0; }
+body {
+  min-height: 100vh; color: var(--text);
+  background: linear-gradient(-45deg, #0a0416, #2e1065, #4c1d95, #6d28d9, #4c1d95, #1a0b2e, #0a0416);
+  background-size: 400% 400%; animation: flow 24s ease infinite;
+  overflow-x: hidden; position: relative;
+}
+body::before {
+  content: ""; position: fixed; inset: -60%;
+  background: conic-gradient(from 0deg, #7c3aed, #a855f7, #6d28d9, #c084fc, #4c1d95, #a855f7, #7c3aed);
+  filter: blur(140px); opacity: .35; z-index: -1;
+  animation: spin 45s linear infinite; pointer-events: none;
+}
+@keyframes flow { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.login-card {
+  width: 100%; max-width: 380px; background: var(--card);
+  backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
+  border: 1px solid var(--card-border); border-radius: 20px; padding: 32px 28px;
+  box-shadow: 0 25px 60px rgba(88, 28, 135, .55), inset 0 1px 0 rgba(255, 255, 255, .06);
+  position: relative; overflow: hidden;
+}
+.login-card::before {
+  content: ""; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%;
+  background: conic-gradient(transparent, rgba(168, 85, 247, .12), transparent 30%);
+  animation: spin 8s linear infinite; pointer-events: none;
+}
+.login-card > * { position: relative; z-index: 1; }
+.login-card h1 {
+  margin: 0 0 4px; font-size: 26px;
+  background: linear-gradient(135deg, #e9d5ff, #c084fc);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.login-card .sub { color: var(--muted); font-size: 14px; margin: 0 0 22px; }
+.login-card input {
+  width: 100%; padding: 14px 16px; margin-bottom: 12px;
+  border-radius: 12px; border: 1.5px solid rgba(168, 85, 247, .3);
+  background: rgba(10, 4, 22, .65); color: var(--text);
+  font-size: 16px; letter-spacing: 2px; transition: all .25s; outline: none;
+}
+.login-card input:focus { border-color: var(--purple-2); box-shadow: 0 0 0 4px rgba(168, 85, 247, .15); }
+.login-card button {
+  width: 100%; padding: 14px; border: none; border-radius: 12px;
+  font-size: 16px; font-weight: 700; color: #fff; cursor: pointer;
+  background: linear-gradient(135deg, #8b5cf6, #a855f7);
+  box-shadow: 0 10px 25px -5px rgba(139, 92, 246, .7); transition: transform .15s, box-shadow .25s;
+}
+.login-card button:hover { transform: translateY(-1px); box-shadow: 0 14px 30px -5px rgba(168, 85, 247, .8); }
+.login-card button:active { transform: translateY(1px); }
+#loginError { color: #fda4af; font-size: 13px; min-height: 18px; margin: 8px 0 0; text-align: center; }
+.shake { animation: shake .4s; }
+@keyframes shake { 0%,100% { transform: translateX(0); } 20%,60% { transform: translateX(-6px); } 40%,80% { transform: translateX(6px); } }
+
+.app-wrap { max-width: 1000px; margin: 0 auto; padding: 28px 20px 60px; }
+.header { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; }
+.logo {
+  width: 48px; height: 48px; border-radius: 14px;
+  background: linear-gradient(135deg, #8b5cf6, #c084fc);
+  display: flex; align-items: center; justify-content: center; font-size: 24px;
+  box-shadow: 0 8px 20px -4px rgba(168, 85, 247, .6);
+}
+.header h1 {
+  margin: 0; font-size: 22px;
+  background: linear-gradient(135deg, #f5f3ff, #c084fc);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.header .tag { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.tabs {
+  display: inline-flex; padding: 5px; background: rgba(30, 18, 60, .55);
+  backdrop-filter: blur(12px); border: 1px solid var(--card-border);
+  border-radius: 14px; gap: 4px; margin-bottom: 20px; flex-wrap: wrap;
+}
+.tab {
+  padding: 10px 20px; border-radius: 10px; cursor: pointer;
+  font-size: 14px; font-weight: 600; color: var(--muted);
+  transition: all .25s; user-select: none;
+}
+.tab:hover { color: var(--text); }
+.tab.active {
+  background: linear-gradient(135deg, #8b5cf6, #a855f7); color: #fff;
+  box-shadow: 0 6px 18px -6px rgba(139, 92, 246, .8);
+}
+.card {
+  background: var(--card); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--card-border); border-radius: 18px; padding: 24px;
+  box-shadow: 0 20px 50px -20px rgba(88, 28, 135, .5), inset 0 1px 0 rgba(255, 255, 255, .05);
+  margin-bottom: 18px; animation: fadeIn .4s ease;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.card h2 { margin: 0 0 16px; font-size: 18px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+input[type=text], input[type=file] {
+  width: 100%; padding: 12px 14px; margin: 4px 0 12px;
+  border-radius: 11px; border: 1.5px solid rgba(168, 85, 247, .25);
+  background: rgba(10, 4, 22, .55); color: var(--text); font-size: 14px; outline: none; transition: all .2s;
+}
+#cmName { height: 56px; font-size: 17px; padding: 14px 18px; letter-spacing: 0.3px; }
+input[type=text]:focus { border-color: var(--purple-2); box-shadow: 0 0 0 4px rgba(168, 85, 247, .13); }
+input[type=file] { padding: 10px; cursor: pointer; font-size: 13px; }
+input[type=file]::file-selector-button {
+  background: linear-gradient(135deg, #8b5cf6, #a855f7); color: #fff;
+  border: none; padding: 8px 14px; border-radius: 8px; margin-right: 12px;
+  cursor: pointer; font-weight: 600; font-size: 13px; transition: filter .2s;
+}
+input[type=file]::file-selector-button:hover { filter: brightness(1.1); }
+button, label.btn {
+  padding: 11px 20px; border: none; border-radius: 11px; cursor: pointer;
+  font-weight: 600; font-size: 14px; color: #fff;
+  background: linear-gradient(135deg, #8b5cf6, #a855f7);
+  box-shadow: 0 8px 20px -8px rgba(139, 92, 246, .8);
+  transition: transform .15s, filter .2s, box-shadow .2s;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+button:hover:not(:disabled), label.btn:hover { filter: brightness(1.08); transform: translateY(-1px); }
+button:active:not(:disabled) { transform: translateY(1px); }
+button:disabled { opacity: .45; cursor: not-allowed; transform: none !important; }
+button.ghost, label.btn.ghost {
+  background: rgba(109, 40, 217, .45); border: 1px solid rgba(168, 85, 247, .35); box-shadow: none;
+}
+button.danger {
+  background: linear-gradient(135deg, #e11d48, #f43f5e);
+  box-shadow: 0 8px 20px -8px rgba(244, 63, 94, .7);
+}
+button.small { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
+.preview {
+  position: relative; display: inline-block; max-width: 100%;
+  margin-top: 14px; border-radius: 12px; overflow: hidden; border: 1px solid var(--card-border);
+}
+.preview img { max-width: 100%; display: block; }
+.preview canvas { position: absolute; top: 0; left: 0; }
+.grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px; margin-top: 16px;
+}
+.person {
+  background: rgba(10, 4, 22, .55); border: 1px solid rgba(168, 85, 247, .2);
+  padding: 8px; border-radius: 12px; text-align: center; transition: transform .2s, border-color .2s;
+}
+.person:hover { transform: translateY(-2px); border-color: rgba(168, 85, 247, .5); }
+.person img { width: 100%; height: 120px; object-fit: cover; border-radius: 8px; }
+.person .name { margin: 8px 0 4px; font-weight: 600; font-size: 13px; word-break: break-word; overflow-wrap: break-word; }
+.person .stats { font-size: 11px; color: var(--muted); margin: 2px 0 8px; }
+.person .stats b { color: #e9d5ff; }
+.person .actions { display: flex; gap: 4px; justify-content: center; }
+.person .actions button { font-size: 11px; padding: 5px 8px; }
+.muted { color: var(--muted); font-size: 13px; }
+.ok { color: var(--ok); font-size: 13px; }
+.error { color: #fda4af; font-size: 13px; }
+#loader { display: none; margin-top: 14px; color: var(--warn); font-size: 14px; font-weight: 500; }
+#loader::after {
+  content: ""; display: inline-block; width: 12px; height: 12px;
+  border: 2px solid var(--warn); border-top-color: transparent; border-radius: 50%;
+  margin-left: 10px; vertical-align: middle; animation: spin 1s linear infinite;
+}
+#scanSummary { margin-top: 14px; font-size: 13px; color: var(--muted); }
+.row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+hr { border: 0; border-top: 1px solid rgba(168, 85, 247, .2); margin: 22px 0; }
+
+.attendance {
+  margin-top: 22px; background: rgba(10, 4, 22, .5);
+  border: 1px solid rgba(168, 85, 247, .3); border-radius: 16px; padding: 20px;
+  animation: fadeIn .5s ease;
+}
+.att-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.att-head h3 { margin: 0; font-size: 17px; }
+.att-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.att-date { margin-top: 6px; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.att-date b { color: #e9d5ff; font-weight: 600; }
+.att-date .weekday {
+  padding: 2px 8px; border-radius: 999px; background: rgba(168, 85, 247, .18);
+  border: 1px solid rgba(168, 85, 247, .35); color: #d8b4fe; font-size: 12px;
+}
+.att-totals { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill { padding: 6px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+.pill.present { background: rgba(52, 211, 153, .15); color: #6ee7b7; border: 1px solid rgba(52, 211, 153, .35); }
+.pill.absent { background: rgba(244, 63, 94, .15); color: #fda4af; border: 1px solid rgba(244, 63, 94, .35); }
+.att-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.att-col h4 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+.att-col ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.att-col li {
+  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  border-radius: 10px; font-size: 14px; background: rgba(30, 18, 60, .5);
+  border: 1px solid transparent; transition: transform .15s;
+}
+.att-col li:hover { transform: translateX(2px); }
+.att-col li .name { flex: 1; min-width: 0; word-break: break-word; overflow-wrap: break-word; line-height: 1.35; }
+.present li { border-color: rgba(52, 211, 153, .3); }
+.absent li { border-color: rgba(244, 63, 94, .3); }
+.att-col li img {
+  width: 34px; height: 34px; border-radius: 50%; object-fit: cover;
+  border: 2px solid rgba(168, 85, 247, .5); flex-shrink: 0;
+}
+.att-col li .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.present .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.absent .dot { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+.att-empty {
+  color: var(--muted); font-size: 13px; font-style: italic; padding: 10px; text-align: center;
+  border: 1px dashed rgba(168, 85, 247, .3); border-radius: 10px;
+}
+.reason-select {
+  padding: 4px 8px; border-radius: 8px; border: 1px solid rgba(168, 85, 247, .3);
+  background: rgba(10, 4, 22, .7); color: var(--text); font-size: 12px; outline: none; cursor: pointer; max-width: 110px;
+}
+.reason-select:focus { border-color: var(--purple-2); }
+.reason-badge {
+  padding: 3px 8px; border-radius: 999px; background: rgba(251, 191, 36, .15);
+  border: 1px solid rgba(251, 191, 36, .35); color: #fcd34d; font-size: 11px; white-space: nowrap;
+}
+.setting-block {
+  background: rgba(10, 4, 22, .4); border: 1px solid rgba(168, 85, 247, .2);
+  border-radius: 12px; padding: 14px 16px;
+}
+.setting-block label { font-size: 13px; font-weight: 600; }
+.setting-block b { color: #e9d5ff; font-family: ui-monospace, monospace; }
+.setting-block input[type=range] { width: 100%; margin: 10px 0 6px; accent-color: #a855f7; }
+.history-item {
+  background: rgba(10, 4, 22, .5); border: 1px solid rgba(168, 85, 247, .25);
+  border-radius: 14px; margin-bottom: 12px; overflow: hidden; transition: border-color .2s;
+}
+.history-item:hover { border-color: rgba(168, 85, 247, .5); }
+.history-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 14px 18px; cursor: pointer; flex-wrap: wrap;
+}
+.history-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }
+.history-title .weekday {
+  padding: 2px 8px; border-radius: 999px; background: rgba(168, 85, 247, .18);
+  border: 1px solid rgba(168, 85, 247, .35); color: #d8b4fe; font-size: 11px;
+}
+.history-counts { display: flex; gap: 8px; }
+.history-body { padding: 0 18px 18px; animation: fadeIn .3s ease; }
+
+@media (max-width: 640px) {
+  .att-grid { grid-template-columns: 1fr; }
+  .header h1 { font-size: 18px; }
+  .logo { width: 40px; height: 40px; font-size: 20px; }
+  .tab { padding: 9px 14px; font-size: 13px; }
+  .card { padding: 18px; border-radius: 16px; }
+  .app-wrap { padding: 20px 14px 40px; }
+  .att-actions { align-items: flex-start; width: 100%; }
+  .history-header { flex-direction: column; align-items: flex-start; }
+}
+</style>
+</head>
+<body>
+
+<div id="loginScreen" class="login-wrap">
+  <div class="login-card" id="loginCard">
+    <h1>Вход</h1>
+    <p class="sub">Введите пароль для доступа к панели</p>
+    <input type="password" id="passInput" placeholder="••••" autocomplete="off" autofocus>
+    <button type="button" onclick="tryLogin()">Войти</button>
+    <p id="loginError"></p>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+  <div class="app-wrap">
+    <div class="header">
+      <div class="logo">📸</div>
+      <div>
+        <h1>Распознавание одноклассников</h1>
+        <div class="tag">Загрузите групповое фото — система покажет, кто пришёл</div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="scan" onclick="switchTab('scan')">Распознать фото</div>
+      <div class="tab" data-tab="admin" onclick="switchTab('admin')">Админ-панель</div>
+      <div class="tab" data-tab="history" onclick="switchTab('history')">История</div>
+    </div>
+
+    <section id="scanSection">
+      <div class="card">
+        <h2>Загрузите групповое фото</h2>
+        <input type="file" id="groupFile" accept="image/*">
+        <div class="preview" id="previewWrap" style="display:none">
+          <img id="groupImg">
+          <canvas id="resultCanvas"></canvas>
+        </div>
+        <br>
+        <button id="scanBtn" onclick="scanGroup()" disabled>Распознать лица</button>
+        <div id="loader">Загрузка моделей и обработка</div>
+        <div id="scanSummary"></div>
+
+        <div id="attendanceReport" class="attendance" style="display:none;">
+          <div class="att-head">
+            <div>
+              <h3>📋 Табель посещаемости</h3>
+              <div id="attDate" class="att-date"></div>
+            </div>
+            <div class="att-actions">
+              <div class="att-totals">
+                <span class="pill present">✅ <b id="presentCount">0</b> на месте</span>
+                <span class="pill absent">❌ <b id="absentCount">0</b> нет</span>
+              </div>
+              <button class="ghost small" onclick="exportCurrentExcel()">📊 Скачать Excel</button>
+            </div>
+          </div>
+          <div class="att-grid">
+            <div class="att-col present">
+              <h4>Присутствуют</h4>
+              <ul id="presentList"></ul>
+            </div>
+            <div class="att-col absent">
+              <h4>Отсутствуют</h4>
+              <ul id="absentList"></ul>
+            </div>
+          </div>
+          <div class="row" style="margin-top:14px;">
+            <button class="ghost small" onclick="deleteCurrentSession(event)">🗑 Убрать из истории</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="adminSection" style="display:none">
+      <div class="card">
+        <h2>Добавить одноклассника</h2>
+        <input type="text" id="cmName" placeholder="Имя и фамилия">
+        <input type="file" id="cmPhoto" accept="image/*">
+        <button onclick="addClassmate()">Добавить в базу</button>
+        <span id="addStatus" style="margin-left:10px;font-size:13px;"></span>
+
+        <div class="muted" style="margin-top:14px;">
+          В базе: <b id="cmCount">0</b> чел. · Хранилище: <span id="storageInfo">…</span>
+        </div>
+
+        <div class="grid" id="classmatesList"></div>
+
+        <hr>
+
+        <div class="row">
+          <button class="ghost" onclick="exportDB()">⬇ Скачать базу</button>
+          <label class="btn ghost">
+            ⬆ Загрузить базу
+            <input type="file" id="importFile" accept="application/json"
+                   style="display:none" onchange="importDB(event)">
+          </label>
+          <button class="danger" onclick="resetAll()">🗑 Сбросить базу</button>
+        </div>
+        <div class="muted" style="margin-top:10px;">
+          💡 Раз в месяц скачивай .json — страховка от очистки браузера.
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>⚙️ Настройки распознавания</h2>
+        <div class="setting-block">
+          <label for="thresholdSlider">Порог распознавания: <b id="thresholdValue">0.50</b></label>
+          <input type="range" id="thresholdSlider"
+                 min="0.4" max="0.6" step="0.01" value="0.5"
+                 oninput="onThresholdChange(this.value)">
+          <div class="muted">
+            Меньше — строже (меньше ложных). Больше — мягче (лучше узнаёт в плохом качестве).
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="historySection" style="display:none">
+      <div class="card">
+        <h2>📚 История проверок</h2>
+        <div class="row" style="margin-bottom:16px;">
+          <button class="ghost" onclick="exportAllHistoryExcel()">📊 Скачать всё в Excel (списком)</button>
+          <button class="danger" onclick="clearHistory()">🗑 Очистить историю</button>
+        </div>
+        <div id="historyList"></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<input type="file" id="updatePhotoInput" accept="image/*" style="display:none" onchange="handleUpdatePhoto(event)">
+
+<script>
+const ADMIN_PASSWORD = '7732';
+const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+const DB_NAME = 'facesDB';
+const DB_VERSION = 2;
+const STORE = 'people';
+const STORE_HISTORY = 'history';
+const OLD_LS_KEY = 'classmates_db_v1';
+
+const REASON_LABELS = { '': '—', sick: 'Болеет', note: 'Справка', truancy: 'Прогул', other: 'Другое' };
+const PLACEHOLDER_THUMB = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="160" height="160" fill="#334155"/><text x="50%" y="50%" fill="#94a3b8" font-family="sans-serif" font-size="14" text-anchor="middle" dominant-baseline="middle">Нет фото</text></svg>');
+
+let updatePersonId = null;
+
+/* IndexedDB */
+function openDB() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(STORE_HISTORY)) db.createObjectStore(STORE_HISTORY, { keyPath: 'id' });
+    };
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+async function dbGetAll() {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const req = db.transaction(STORE, 'readonly').objectStore(STORE).getAll();
+    req.onsuccess = () => res(req.result || []);
+    req.onerror = () => rej(req.error);
+  });
+}
+async function dbPut(item) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(item);
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+}
+async function dbBulkPut(items) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    items.forEach(i => tx.objectStore(STORE).put(i));
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+}
+async function dbDelete(id) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).delete(id);
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+}
+async function dbClear() {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).clear();
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+}
+async function dbGetHistory() {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const req = db.transaction(STORE_HISTORY, 'readonly').objectStore(STORE_HISTORY).getAll();
+    req.onsuccess = () => res(req.result || []);
+    req.onerror = () => rej(req.error);
+  });
+}
+async function dbPutHistory(item) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE_HISTORY, 'readwrite');
+    tx.objectStore(STORE_HISTORY).put(item);
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+}
+async function dbDeleteHistory(id) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE_HISTORY, 'readwrite');
+    tx.objectStore(STORE_HISTORY).delete(id);
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+}
+async function dbClearHistory() {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE_HISTORY, 'readwrite');
+    tx.objectStore(STORE_HISTORY).clear();
+    tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error);
+  });
+}
+
+/* Хранилище */
+async function requestPersistence() {
+  try { if (navigator.storage?.persist) return await navigator.storage.persist(); } catch (e) { console.warn(e); }
+  return false;
+}
+async function showStorageInfo() {
+  const el = document.getElementById('storageInfo');
+  if (!el) return;
+  if (!navigator.storage?.estimate) { el.textContent = 'н/д'; return; }
+  try {
+    const est = await navigator.storage.estimate();
+    const used = (est.usage / 1024 / 1024).toFixed(2);
+    const quota = (est.quota / 1024 / 1024).toFixed(0);
+    const persisted = await navigator.storage.persisted?.();
+    el.textContent = `${used} МБ / ${quota} МБ${persisted ? ' (защищено)' : ''}`;
+  } catch { el.textContent = 'н/д'; }
+}
+async function migrateFromLocalStorage() {
+  try {
+    const old = localStorage.getItem(OLD_LS_KEY);
+    if (!old) return;
+    const items = JSON.parse(old);
+    if (!Array.isArray(items) || !items.length) return;
+    const existing = await dbGetAll();
+    if (existing.length) return;
+    await dbBulkPut(items);
+  } catch (e) { console.error('Migration failed:', e); }
+}
+
+/* Модели */
+let modelsReady = false;
+async function loadModels() {
+  try {
+    await Promise.all([
+      faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+    ]);
+    modelsReady = true;
+    const btn = document.getElementById('scanBtn');
+    if (btn) btn.disabled = false;
+  } catch (e) {
+    console.error(e);
+    const s = document.getElementById('scanSummary');
+    if (s) s.textContent = '⚠️ Не удалось загрузить модели. Проверьте интернет.';
+  }
+}
+
+/* Состояние */
+let classmates = [], historyCache = [], matcher = null, currentSession = null;
+let recognitionThreshold = parseFloat(localStorage.getItem('recog_threshold') || '0.5');
+if (isNaN(recognitionThreshold) || recognitionThreshold < 0.4 || recognitionThreshold > 0.6) recognitionThreshold = 0.5;
+
+function buildMatcher() {
+  if (!classmates.length) { matcher = null; return; }
+  const labeled = classmates.map(c => new faceapi.LabeledFaceDescriptors(c.id, [new Float32Array(c.descriptor)]));
+  matcher = new faceapi.FaceMatcher(labeled, recognitionThreshold);
+}
+
+async function loadDB() {
+  await migrateFromLocalStorage();
+  classmates = await dbGetAll();
+  historyCache = await dbGetHistory();
+  buildMatcher();
+  renderClassmates();
+  renderHistory();
+  showStorageInfo();
+}
+
+/* Логин */
+function tryLogin() {
+  const input = document.getElementById('passInput');
+  const err = document.getElementById('loginError');
+  const val = (input.value || '').trim();
+  if (val === ADMIN_PASSWORD) {
+    err.textContent = '';
+    try { sessionStorage.setItem('logged_in', '1'); } catch (e) {}
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    loadDB();
+  } else {
+    err.textContent = 'Неверный пароль';
+    const card = document.getElementById('loginCard');
+    card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
+    input.value = ''; input.focus();
+  }
+}
+document.getElementById('passInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); tryLogin(); }
+});
+
+/* Вкладки */
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  document.getElementById('scanSection').style.display = tab === 'scan' ? 'block' : 'none';
+  document.getElementById('adminSection').style.display = tab === 'admin' ? 'block' : 'none';
+  document.getElementById('historySection').style.display = tab === 'history' ? 'block' : 'none';
+}
+
+/* Хелперы */
+function loadImg(src) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img); img.onerror = rej; img.src = src;
+  });
+}
+function fileToDataURL(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file);
+  });
+}
+function makeThumb(img, size = 160) {
+  const c = document.createElement('canvas');
+  const ratio = Math.min(size / img.width, size / img.height);
+  c.width = Math.round(img.width * ratio); c.height = Math.round(img.height * ratio);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.75);
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, ch => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[ch]));
+}
+function formatDate(ts) {
+  const d = new Date(ts);
+  const months = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+  const weekdays = ['воскресенье','понедельник','вторник','среда','четверг','пятница','суббота'];
+  return {
+    date: `${String(d.getDate()).padStart(2,'0')} ${months[d.getMonth()]} ${d.getFullYear()}`,
+    shortDate: `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}`,
+    weekday: weekdays[d.getDay()]
+  };
+}
+function formatDateForFile(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function onThresholdChange(value) {
+  recognitionThreshold = parseFloat(value);
+  if (isNaN(recognitionThreshold)) recognitionThreshold = 0.5;
+  try { localStorage.setItem('recog_threshold', String(recognitionThreshold)); } catch (e) {}
+  document.getElementById('thresholdValue').textContent = recognitionThreshold.toFixed(2);
+  buildMatcher();
+}
+
+function computeStats(personId) {
+  let present = 0, total = 0;
+  historyCache.forEach(s => {
+    if (s.present.some(p => p.id === personId)) { present++; total++; }
+    else if (s.absent.some(a => a.id === personId)) { total++; }
+  });
+  return { present, total, pct: total ? Math.round(present / total * 100) : null };
+}
+
+/* Добавление */
+async function addClassmate() {
+  const name = document.getElementById('cmName').value.trim();
+  const file = document.getElementById('cmPhoto').files[0];
+  const status = document.getElementById('addStatus');
+  if (!name) { status.className = 'error'; status.textContent = 'Введите имя'; return; }
+  if (!file) { status.className = 'error'; status.textContent = 'Выберите фото'; return; }
+  if (!modelsReady) { status.className = 'error'; status.textContent = 'Модели ещё грузятся'; return; }
+  status.className = 'muted'; status.textContent = 'Обработка...';
+  try {
+    const dataUrl = await fileToDataURL(file);
+    const img = await loadImg(dataUrl);
+    const det = await faceapi.detectSingleFace(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })).withFaceLandmarks().withFaceDescriptor();
+    if (!det) { status.className = 'error'; status.textContent = 'Лицо не найдено'; return; }
+    const record = {
+      id: Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      name, thumb: makeThumb(img), descriptor: Array.from(det.descriptor)
+    };
+    await dbPut(record);
+    classmates.push(record);
+    buildMatcher();
+    renderClassmates();
+    showStorageInfo();
+    document.getElementById('cmName').value = '';
+    document.getElementById('cmPhoto').value = '';
+    status.className = 'ok'; status.textContent = '✓ Добавлено';
+    setTimeout(() => status.textContent = '', 2000);
+  } catch (e) {
+    console.error(e); status.className = 'error'; status.textContent = 'Ошибка обработки';
+  }
+}
+
+function updateClassmatePhoto(id) {
+  updatePersonId = id;
+  document.getElementById('updatePhotoInput').click();
+}
+async function handleUpdatePhoto(e) {
+  const file = e.target.files[0];
+  if (!file || !updatePersonId) return;
+  e.target.value = '';
+  if (!modelsReady) { alert('Модели ещё грузятся'); return; }
+  try {
+    const person = classmates.find(c => c.id === updatePersonId);
+    if (!person) return;
+    const dataUrl = await fileToDataURL(file);
+    const img = await loadImg(dataUrl);
+    const det = await faceapi.detectSingleFace(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })).withFaceLandmarks().withFaceDescriptor();
+    if (!det) { alert('Лицо не найдено на фото.'); return; }
+    person.thumb = makeThumb(img);
+    person.descriptor = Array.from(det.descriptor);
+    await dbPut(person);
+    buildMatcher();
+    renderClassmates();
+    alert('✓ Фото обновлено');
+  } catch (err) {
+    console.error(err); alert('Ошибка обновления фото');
+  } finally { updatePersonId = null; }
+}
+
+function renderClassmates() {
+  const list = document.getElementById('classmatesList');
+  document.getElementById('cmCount').textContent = classmates.length;
+  list.innerHTML = '';
+  if (!classmates.length) {
+    list.innerHTML = '<div class="muted">Пока никого не добавлено.</div>'; return;
+  }
+  classmates.forEach(c => {
+    const stats = computeStats(c.id);
+    const statsHtml = stats.total > 0
+      ? `<div class="stats">${stats.present}/${stats.total} · <b>${stats.pct}%</b></div>`
+      : `<div class="stats muted">нет проверок</div>`;
+    const div = document.createElement('div');
+    div.className = 'person';
+    div.innerHTML = `
+      <img src="${c.thumb}" alt="">
+      <div class="name">${escapeHtml(c.name)}</div>
+      ${statsHtml}
+      <div class="actions">
+        <button class="ghost" onclick="updateClassmatePhoto('${c.id}')">📷 Фото</button>
+        <button class="danger" onclick="removeClassmate('${c.id}')">🗑</button>
+      </div>
+    `;
+    list.appendChild(div);
+  });
+}
+async function removeClassmate(id) {
+  await dbDelete(id);
+  classmates = classmates.filter(c => c.id !== id);
+  buildMatcher();
+  renderClassmates();
+  showStorageInfo();
+}
+async function resetAll() {
+  if (!confirm('Удалить всех одноклассников из базы?')) return;
+  await dbClear();
+  classmates = [];
+  buildMatcher();
+  renderClassmates();
+  showStorageInfo();
+}
+
+function exportDB() {
+  if (!classmates.length) { alert('База пуста'); return; }
+  const blob = new Blob([JSON.stringify(classmates, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `classmates_backup_${formatDateForFile(Date.now())}.json`;
+  a.click(); URL.revokeObjectURL(url);
+}
+async function importDB(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const text = await file.text();
+  try {
+    const data = JSON.parse(text);
+    if (!Array.isArray(data)) throw new Error('Неверный формат');
+    if (!confirm(`Импортировать ${data.length} записей? Текущая база будет заменена.`)) {
+      e.target.value = ''; return;
+    }
+    await dbClear();
+    await dbBulkPut(data);
+    await loadDB();
+    alert('✓ База загружена');
+  } catch (err) { alert('Ошибка чтения: ' + err.message); }
+  e.target.value = '';
+}
+
+/* Скан */
+document.getElementById('groupFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const dataUrl = await fileToDataURL(file);
+  const img = document.getElementById('groupImg');
+  img.src = dataUrl;
+  document.getElementById('previewWrap').style.display = 'inline-block';
+  document.getElementById('scanSummary').textContent = '';
+  document.getElementById('attendanceReport').style.display = 'none';
+  const canvas = document.getElementById('resultCanvas');
+  canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+});
+
+async function scanGroup() {
+  if (!modelsReady) { document.getElementById('scanSummary').textContent = 'Модели ещё грузятся…'; return; }
+  const img = document.getElementById('groupImg');
+  if (!img.src) return;
+  if (!classmates.length) {
+    document.getElementById('scanSummary').textContent = '⚠️ База пуста. Добавьте одноклассников в админ-панели.';
+    return;
+  }
+  document.getElementById('loader').style.display = 'block';
+  document.getElementById('scanSummary').textContent = '';
+  document.getElementById('attendanceReport').style.display = 'none';
+  try {
+    await new Promise(r => setTimeout(r, 60));
+    const displaySize = { width: img.clientWidth, height: img.clientHeight };
+    const canvas = document.getElementById('resultCanvas');
+    faceapi.matchDimensions(canvas, displaySize);
+    
+    // Оптимизированные параметры для лучшего распознавания группы
+    const detections = await faceapi.detectAllFaces(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.4, maxResults: 100 }))
+      .withFaceLandmarks().withFaceDescriptors();
+      
+    const resized = faceapi.resizeResults(detections, displaySize);
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const foundIds = new Set();
+    
+    resized.forEach(det => {
+      const box = det.detection.box;
+      let label = 'Неизвестный', color = '#f43f5e', conf = '';
+      if (matcher) {
+        const best = matcher.findBestMatch(det.descriptor);
+        if (best.label !== 'unknown') {
+          const person = classmates.find(c => c.id === best.label);
+          if (person) {
+            label = person.name; color = '#34d399';
+            conf = ` ${(1 - best.distance).toFixed(2)}`;
+            foundIds.add(person.id);
+          }
+        }
+      }
+      ctx.strokeStyle = color; ctx.lineWidth = 3;
+      ctx.strokeRect(box.x, box.y, box.width, box.height);
+      const text = `${label}${conf}`;
+      ctx.font = 'bold 16px sans-serif';
+      const tw = ctx.measureText(text).width;
+      ctx.fillStyle = color;
+      ctx.fillRect(box.x, box.y - 24, tw + 12, 24);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(text, box.x + 6, box.y - 7);
+    });
+    const total = resized.length;
+    const unknown = total - foundIds.size;
+    document.getElementById('scanSummary').textContent = `Лиц: ${total}. Узнано: ${foundIds.size}. Неизвестных: ${unknown}.`;
+    
+    const present = classmates.filter(c => foundIds.has(c.id)).map(c => ({ id: c.id, name: c.name, thumb: c.thumb }));
+    const absent = classmates.filter(c => !foundIds.has(c.id)).map(c => ({ id: c.id, name: c.name, thumb: c.thumb, reason: '' }));
+    
+    const session = {
+      id: 's_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      timestamp: Date.now(), present, absent, unknownCount: unknown, totalFaces: total
+    };
+    
+    await dbPutHistory(session);
+    historyCache.push(session);
+    currentSession = session;
+    
+    renderAttendance(session, true);
+    renderHistory();
+    renderClassmates();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('scanSummary').textContent = 'Ошибка распознавания.';
+  } finally {
+    document.getElementById('loader').style.display = 'none';
+  }
+}
+
+function buildAttendanceLists(session, editable) {
+  const presentHtml = session.present.length
+    ? session.present.map(p => `<li><img src="${p.thumb}" alt=""><span class="name">${escapeHtml(p.name)}</span><span class="dot"></span></li>`).join('')
+    : '<div class="att-empty">Никого не найдено</div>';
+  const absentHtml = session.absent.length
+    ? session.absent.map(a => {
+        const reasonControl = editable
+          ? `<select class="reason-select" onchange="setReason('${session.id}', '${a.id}', this.value)">
+              ${['', 'sick', 'note', 'truancy', 'other'].map(v => `<option value="${v}"${a.reason === v ? ' selected' : ''}>${REASON_LABELS[v]}</option>`).join('')}
+            </select>`
+          : (a.reason ? `<span class="reason-badge">${REASON_LABELS[a.reason]}</span>` : '');
+        return `<li><img src="${a.thumb}" alt=""><span class="name">${escapeHtml(a.name)}</span>${reasonControl}<span class="dot"></span></li>`;
+      }).join('')
+    : '<div class="att-empty">Все на месте 🎉</div>';
+  return { present: presentHtml, absent: absentHtml };
+}
+
+function renderAttendance(session, editable) {
+  const box = document.getElementById('attendanceReport');
+  const f = formatDate(session.timestamp);
+  document.getElementById('attDate').innerHTML = `Проверка от <b>${f.date}</b> · <span class="weekday">${f.weekday}</span>`;
+  const lists = buildAttendanceLists(session, editable);
+  document.getElementById('presentList').innerHTML = lists.present;
+  document.getElementById('absentList').innerHTML = lists.absent;
+  document.getElementById('presentCount').textContent = session.present.length;
+  document.getElementById('absentCount').textContent = session.absent.length;
+  box.style.display = 'block';
+}
+
+async function setReason(sessionId, personId, value) {
+  const s = historyCache.find(x => x.id === sessionId);
+  if (!s) return;
+  const a = s.absent.find(x => x.id === personId);
+  if (!a) return;
+  a.reason = value;
+  try {
+    await dbPutHistory(s);
+  } catch (e) { console.error('Не удалось сохранить причину:', e); }
+}
+
+function renderHistory() {
+  const list = document.getElementById('historyList');
+  if (!historyCache.length) {
+    list.innerHTML = '<div class="muted">История пуста. Сделайте проверку, чтобы записи появились здесь.</div>';
+    return;
+  }
+  const sorted = [...historyCache].sort((a, b) => b.timestamp - a.timestamp);
+  list.innerHTML = sorted.map(s => {
+    const f = formatDate(s.timestamp);
+    const lists = buildAttendanceLists(s, true);
+    return `
+      <div class="history-item">
+        <div class="history-header" onclick="toggleHistoryItem('${s.id}')">
+          <div class="history-title">
+            <b>${f.date}</b><span class="weekday">${f.weekday}</span>
+          </div>
+          <div class="history-counts">
+            <span class="pill present">✅ ${s.present.length}</span>
+            <span class="pill absent">❌ ${s.absent.length}</span>
+            <button class="danger small" onclick="deleteSession(event, '${s.id}')">🗑</button>
+          </div>
+        </div>
+        <div class="history-body" id="hb_${s.id}" style="display:none">
+          <div class="att-grid">
+            <div class="att-col present"><h4>Присутствуют</h4><ul>${lists.present}</ul></div>
+            <div class="att-col absent"><h4>Отсутствуют</h4><ul>${lists.absent}</ul></div>
+          </div>
+          <div class="row" style="margin-top:14px;">
+            <button class="ghost small" onclick="exportSessionExcel('${s.id}')">📊 Скачать Excel</button>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function toggleHistoryItem(id) {
+  const el = document.getElementById('hb_' + id);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+async function deleteSession(event, id) {
+  if (event) event.stopPropagation();
+  if (!confirm('Удалить эту запись из истории?')) return;
+  await dbDeleteHistory(id);
+  historyCache = historyCache.filter(s => s.id !== id);
+  if (currentSession && currentSession.id === id) {
+    currentSession = null;
+    document.getElementById('attendanceReport').style.display = 'none';
+  }
+  renderHistory(); renderClassmates();
+}
+
+async function deleteCurrentSession(event) {
+  if (event) event.stopPropagation();
+  if (!currentSession) return;
+  await deleteSession(null, currentSession.id);
+}
+
+async function clearHistory() {
+  if (!confirm('Удалить всю историю проверок?')) return;
+  await dbClearHistory();
+  historyCache = []; currentSession = null;
+  document.getElementById('attendanceReport').style.display = 'none';
+  renderHistory(); renderClassmates();
+}
+
+/* Excel */
+function exportXLSX(rows, filename, widths) {
+  if (typeof XLSX === 'undefined') {
+    const csv = rows.map(r => r.map(v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"').join(';')).join('\r\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename.replace(/\.xlsx$/, '.csv');
+    a.click(); URL.revokeObjectURL(url); return;
+  }
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = widths.map(w => ({ wch: w }));
+  ws['!rows'] = rows.map(() => ({ hpt: 20 }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Табель');
+  XLSX.writeFile(wb, filename);
+}
+
+/* 👇 НОВЫЙ ФОРМАТ ДЛЯ РАСПОЗНАВАНИЯ (ФИО + СЕГОДНЯШНЯЯ ДАТА) 👇 */
+function exportCurrentExcel() {
+  if (!currentSession) { alert('Нет активной проверки'); return; }
+  if (!classmates.length) { alert('База пуста'); return; }
+
+  const dateStr = formatDate(currentSession.timestamp).shortDate;
+  const rows = [['ФИО', dateStr]];
+  const sortedClassmates = [...classmates].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+
+  sortedClassmates.forEach(c => {
+    const isPresent = currentSession.present.some(p => p.id === c.id);
+    const absentRecord = currentSession.absent.find(a => a.id === c.id);
+
+    let status = '—';
+    if (isPresent) {
+      status = 'Был';
+    } else if (absentRecord) {
+      status = absentRecord.reason ? REASON_LABELS[absentRecord.reason] : 'Нет';
+    }
+
+    rows.push([c.name, status]);
+  });
+
+  const widths = [40, 15];
+  exportXLSX(rows, `табель_${formatDateForFile(currentSession.timestamp)}.xlsx`, widths);
+}
+
+/* Экспорт для истории (списком) */
+function exportSessionExcel(sessionId) {
+  const s = historyCache.find(x => x.id === sessionId);
+  if (!s) { alert('Сессия не найдена'); return; }
+  
+  const dateStr = formatDate(s.timestamp).shortDate;
+  const rows = [['ФИО', dateStr]];
+  const sortedClassmates = [...classmates].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+
+  sortedClassmates.forEach(c => {
+    const isPresent = s.present.some(p => p.id === c.id);
+    const absentRecord = s.absent.find(a => a.id === c.id);
+
+    let status = '—';
+    if (isPresent) {
+      status = 'Был';
+    } else if (absentRecord) {
+      status = absentRecord.reason ? REASON_LABELS[absentRecord.reason] : 'Нет';
+    }
+
+    rows.push([c.name, status]);
+  });
+
+  exportXLSX(rows, `табель_${formatDateForFile(s.timestamp)}.xlsx`, [40, 15]);
+}
+
+function exportAllHistoryExcel() {
+  if (!historyCache.length) { alert('История пуста'); return; }
+  const sorted = [...historyCache].sort((a, b) => b.timestamp - a.timestamp);
+  const rows = [['Дата', 'ФИО', 'Статус', 'Причина']];
+  sorted.forEach(s => {
+    const f = formatDate(s.timestamp);
+    s.present.forEach(p => rows.push([f.date, p.name, 'Присутствует', '']));
+    s.absent.forEach(a => rows.push([f.date, a.name, 'Отсутствует', REASON_LABELS[a.reason] || '']));
+  });
+  exportXLSX(rows, `история_табелей_${formatDateForFile(Date.now())}.xlsx`, [20, 45, 16, 16]);
+}
+
+/* Старт */
+window.addEventListener('DOMContentLoaded', () => {
+  if (typeof faceapi === 'undefined') {
+    document.body.innerHTML = `<div style="padding:40px;font-family:system-ui,sans-serif;color:#fff;background:linear-gradient(135deg,#4c1d95,#7c3aed);min-height:100vh;"><h1>⚠️ Не удалось загрузить face-api.js</h1><p>Проверьте интернет.</p></div>`;
+    return;
+  }
+  const slider = document.getElementById('thresholdSlider');
+  const label = document.getElementById('thresholdValue');
+  if (slider) slider.value = recognitionThreshold;
+  if (label) label.textContent = recognitionThreshold.toFixed(2);
+  loadModels();
+  requestPersistence();
+  let logged = false;
+  try { logged = sessionStorage.getItem('logged_in') === '1'; } catch (e) {}
+  if (logged) {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    loadDB();
+  } else {
+    document.getElementById('passInput').focus();
+  }
+  window.addEventListener('click', function once() {
+    requestPersistence();
+    window.removeEventListener('click', once);
+  }, { once: true });
+});
+</script>
+</body>
+</html>
