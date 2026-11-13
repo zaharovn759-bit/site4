@@ -159,6 +159,7 @@ button.small { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
 .person .name { margin: 8px 0 4px; font-weight: 600; font-size: 13px; word-break: break-word; overflow-wrap: break-word; }
 .person .stats { font-size: 11px; color: var(--muted); margin: 2px 0 8px; }
 .person .stats b { color: #e9d5ff; }
+.person .badge { font-size: 10px; background: rgba(168, 85, 247, 0.2); padding: 2px 6px; border-radius: 4px; margin-bottom: 6px; display: inline-block; color: #c4b5fd; }
 .person .actions { display: flex; gap: 4px; justify-content: center; }
 .person .actions button { font-size: 11px; padding: 5px 8px; }
 .muted { color: var(--muted); font-size: 13px; }
@@ -365,12 +366,13 @@ hr { border: 0; border-top: 1px solid rgba(168, 85, 247, .2); margin: 22px 0; }
       <div class="card">
         <h2>⚙️ Настройки распознавания</h2>
         <div class="setting-block">
-          <label for="thresholdSlider">Порог распознавания: <b id="thresholdValue">0.50</b></label>
+          <label for="thresholdSlider">Порог уверенности: <b id="thresholdValue">0.45</b></label>
           <input type="range" id="thresholdSlider"
-                 min="0.4" max="0.6" step="0.01" value="0.5"
+                 min="0.3" max="0.6" step="0.01" value="0.45"
                  oninput="onThresholdChange(this.value)">
           <div class="muted">
-            Меньше — строже (меньше ложных). Больше — мягче (лучше узнаёт в плохом качестве).
+            Если система путает людей (называет чужие имена), сдвинь ползунок <b>влево</b> (до 0.35).<br>
+            Если система не узнаёт людей с плохих ракурсов, сдвинь <b>вправо</b> (до 0.55).
           </div>
         </div>
       </div>
@@ -389,13 +391,13 @@ hr { border: 0; border-top: 1px solid rgba(168, 85, 247, .2); margin: 22px 0; }
   </div>
 </div>
 
-<input type="file" id="updatePhotoInput" accept="image/*" style="display:none" onchange="handleUpdatePhoto(event)">
+<input type="file" id="updatePhotoInput" accept="image/*" multiple style="display:none" onchange="handleUpdatePhoto(event)">
 
 <script>
 const ADMIN_PASSWORD = '7732';
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
 const DB_NAME = 'facesDB';
-const DB_VERSION = 2;
+const DB_VERSION = 3; // Версия базы обновлена для поддержки нескольких фото
 const STORE = 'people';
 const STORE_HISTORY = 'history';
 const OLD_LS_KEY = 'classmates_db_v1';
@@ -411,8 +413,28 @@ function openDB() {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = e => {
       const db = e.target.result;
-      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
-      if (!db.objectStoreNames.contains(STORE_HISTORY)) db.createObjectStore(STORE_HISTORY, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(STORE)) {
+        db.createObjectStore(STORE, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_HISTORY)) {
+        db.createObjectStore(STORE_HISTORY, { keyPath: 'id' });
+      }
+      // Миграция старой БД: descriptor -> descriptors
+      if (e.oldVersion < 3) {
+        const tx = e.target.transaction;
+        const store = tx.objectStore(STORE);
+        const reqAll = store.getAll();
+        reqAll.onsuccess = () => {
+          const items = reqAll.result || [];
+          items.forEach(item => {
+            if (item.descriptor && !item.descriptors) {
+              item.descriptors = [item.descriptor];
+              delete item.descriptor;
+              store.put(item);
+            }
+          });
+        };
+      }
     };
     req.onsuccess = () => res(req.result);
     req.onerror = () => rej(req.error);
@@ -525,7 +547,8 @@ let modelsReady = false;
 async function loadModels() {
   try {
     await Promise.all([
-      faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+      faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),       // Для админки (точный)
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),    // Для групп (быстрый)
       faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
       faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
     ]);
@@ -541,18 +564,32 @@ async function loadModels() {
 
 /* Состояние */
 let classmates = [], historyCache = [], matcher = null, currentSession = null;
-let recognitionThreshold = parseFloat(localStorage.getItem('recog_threshold') || '0.5');
-if (isNaN(recognitionThreshold) || recognitionThreshold < 0.4 || recognitionThreshold > 0.6) recognitionThreshold = 0.5;
+let recognitionThreshold = parseFloat(localStorage.getItem('recog_threshold') || '0.45');
+if (isNaN(recognitionThreshold) || recognitionThreshold < 0.3 || recognitionThreshold > 0.6) recognitionThreshold = 0.45;
 
 function buildMatcher() {
   if (!classmates.length) { matcher = null; return; }
-  const labeled = classmates.map(c => new faceapi.LabeledFaceDescriptors(c.id, [new Float32Array(c.descriptor)]));
+  const labeled = classmates.map(c => {
+    const descs = c.descriptors || (c.descriptor ? [c.descriptor] : []);
+    const floatDescs = descs.map(d => new Float32Array(d));
+    return new faceapi.LabeledFaceDescriptors(c.id, floatDescs);
+  });
   matcher = new faceapi.FaceMatcher(labeled, recognitionThreshold);
 }
 
 async function loadDB() {
   await migrateFromLocalStorage();
   classmates = await dbGetAll();
+  let needsUpdate = false;
+  classmates.forEach(c => {
+    if (c.descriptor && !c.descriptors) {
+      c.descriptors = [c.descriptor];
+      delete c.descriptor;
+      needsUpdate = true;
+    }
+  });
+  if (needsUpdate) await dbBulkPut(classmates);
+
   historyCache = await dbGetHistory();
   buildMatcher();
   renderClassmates();
@@ -603,6 +640,21 @@ function fileToDataURL(file) {
     r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file);
   });
 }
+function resizeImg(img, maxSize = 1500) {
+  return new Promise((resolve) => {
+    let w = img.width, h = img.height;
+    if (w <= maxSize && h <= maxSize) return resolve(img);
+    if (w > h) { h = Math.round(h * maxSize / w); w = maxSize; }
+    else { w = Math.round(w * maxSize / h); h = maxSize; }
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+    const newImg = new Image();
+    newImg.onload = () => resolve(newImg);
+    newImg.src = c.toDataURL('image/jpeg', 0.9);
+  });
+}
 function makeThumb(img, size = 160) {
   const c = document.createElement('canvas');
   const ratio = Math.min(size / img.width, size / img.height);
@@ -630,7 +682,7 @@ function formatDateForFile(ts) {
 
 function onThresholdChange(value) {
   recognitionThreshold = parseFloat(value);
-  if (isNaN(recognitionThreshold)) recognitionThreshold = 0.5;
+  if (isNaN(recognitionThreshold)) recognitionThreshold = 0.45;
   try { localStorage.setItem('recog_threshold', String(recognitionThreshold)); } catch (e) {}
   document.getElementById('thresholdValue').textContent = recognitionThreshold.toFixed(2);
   buildMatcher();
@@ -655,19 +707,34 @@ async function addClassmate() {
   if (!modelsReady) { status.className = 'error'; status.textContent = 'Модели ещё грузятся'; return; }
   status.className = 'muted'; status.textContent = 'Обработка...';
   try {
-    const dataUrl = await fileToDataURL(file);
-    const img = await loadImg(dataUrl);
-    const det = await faceapi.detectSingleFace(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })).withFaceLandmarks().withFaceDescriptor();
-    if (!det) { status.className = 'error'; status.textContent = 'Лицо не найдено'; return; }
+    let dataUrl = await fileToDataURL(file);
+    let img = await loadImg(dataUrl);
+    img = await resizeImg(img, 1500);
+    
+    const dets = await faceapi.detectAllFaces(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+      .withFaceLandmarks().withFaceDescriptors();
+      
+    if (dets.length === 0) {
+      status.className = 'error'; status.textContent = 'Лицо не найдено. Нужно чёткое фото.'; return;
+    }
+    if (dets.length > 1) {
+      status.className = 'error'; status.textContent = 'На фото больше одного лица. Загрузите одиночное фото.'; return;
+    }
+
+    const det = dets[0];
     const record = {
       id: Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-      name, thumb: makeThumb(img), descriptor: Array.from(det.descriptor)
+      name, 
+      thumb: makeThumb(img), 
+      descriptors: [Array.from(det.descriptor)]
     };
+    
     await dbPut(record);
     classmates.push(record);
     buildMatcher();
     renderClassmates();
     showStorageInfo();
+    
     document.getElementById('cmName').value = '';
     document.getElementById('cmPhoto').value = '';
     status.className = 'ok'; status.textContent = '✓ Добавлено';
@@ -682,26 +749,50 @@ function updateClassmatePhoto(id) {
   document.getElementById('updatePhotoInput').click();
 }
 async function handleUpdatePhoto(e) {
-  const file = e.target.files[0];
-  if (!file || !updatePersonId) return;
+  const files = Array.from(e.target.files);
+  if (!files.length || !updatePersonId) return;
   e.target.value = '';
   if (!modelsReady) { alert('Модели ещё грузятся'); return; }
-  try {
-    const person = classmates.find(c => c.id === updatePersonId);
-    if (!person) return;
-    const dataUrl = await fileToDataURL(file);
-    const img = await loadImg(dataUrl);
-    const det = await faceapi.detectSingleFace(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })).withFaceLandmarks().withFaceDescriptor();
-    if (!det) { alert('Лицо не найдено на фото.'); return; }
-    person.thumb = makeThumb(img);
-    person.descriptor = Array.from(det.descriptor);
+  
+  const person = classmates.find(c => c.id === updatePersonId);
+  if (!person) return;
+  
+  if (!person.descriptors) person.descriptors = person.descriptor ? [person.descriptor] : [];
+
+  let successCount = 0;
+  let errorMsg = '';
+
+  for (const file of files) {
+    try {
+      let dataUrl = await fileToDataURL(file);
+      let img = await loadImg(dataUrl);
+      img = await resizeImg(img, 1500);
+      
+      const dets = await faceapi.detectAllFaces(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+        .withFaceLandmarks().withFaceDescriptors();
+        
+      if (dets.length === 1) {
+        person.descriptors.push(Array.from(dets[0].descriptor));
+        if (successCount === 0) person.thumb = makeThumb(img);
+        successCount++;
+      } else {
+        errorMsg = 'Некоторые фото пропущены (нет лица или их несколько).';
+      }
+    } catch (err) {
+      console.error(err);
+      errorMsg = 'Ошибка при чтении одного из фото.';
+    }
+  }
+
+  if (successCount > 0) {
     await dbPut(person);
     buildMatcher();
     renderClassmates();
-    alert('✓ Фото обновлено');
-  } catch (err) {
-    console.error(err); alert('Ошибка обновления фото');
-  } finally { updatePersonId = null; }
+    alert(`✓ Добавлено ${successCount} новых ракурсов! Теперь система узнает этого человека лучше.\n${errorMsg}`);
+  } else {
+    alert(`Не удалось добавить фото. ${errorMsg}`);
+  }
+  updatePersonId = null;
 }
 
 function renderClassmates() {
@@ -716,14 +807,19 @@ function renderClassmates() {
     const statsHtml = stats.total > 0
       ? `<div class="stats">${stats.present}/${stats.total} · <b>${stats.pct}%</b></div>`
       : `<div class="stats muted">нет проверок</div>`;
+      
+    const count = c.descriptors ? c.descriptors.length : (c.descriptor ? 1 : 0);
+    const badge = `<div class="badge">📸 Ракурсов: ${count}</div>`;
+      
     const div = document.createElement('div');
     div.className = 'person';
     div.innerHTML = `
       <img src="${c.thumb}" alt="">
       <div class="name">${escapeHtml(c.name)}</div>
+      ${badge}
       ${statsHtml}
       <div class="actions">
-        <button class="ghost" onclick="updateClassmatePhoto('${c.id}')">📷 Фото</button>
+        <button class="ghost" onclick="updateClassmatePhoto('${c.id}')">➕ Фото</button>
         <button class="danger" onclick="removeClassmate('${c.id}')">🗑</button>
       </div>
     `;
@@ -776,9 +872,13 @@ async function importDB(e) {
 document.getElementById('groupFile').addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  const dataUrl = await fileToDataURL(file);
-  const img = document.getElementById('groupImg');
-  img.src = dataUrl;
+  let dataUrl = await fileToDataURL(file);
+  let img = await loadImg(dataUrl);
+  img = await resizeImg(img, 1500);
+  
+  const imgEl = document.getElementById('groupImg');
+  imgEl.src = img.src;
+  
   document.getElementById('previewWrap').style.display = 'inline-block';
   document.getElementById('scanSummary').textContent = '';
   document.getElementById('attendanceReport').style.display = 'none';
@@ -803,9 +903,9 @@ async function scanGroup() {
     const canvas = document.getElementById('resultCanvas');
     faceapi.matchDimensions(canvas, displaySize);
     
-    // Оптимизированные параметры для лучшего распознавания группы
-    const detections = await faceapi.detectAllFaces(img, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.4, maxResults: 100 }))
-      .withFaceLandmarks().withFaceDescriptors();
+    const detections = await faceapi.detectAllFaces(img, 
+      new faceapi.TinyFaceDetectorOptions({ inputSize: 608, scoreThreshold: 0.4 })
+    ).withFaceLandmarks(true).withFaceDescriptors();
       
     const resized = faceapi.resizeResults(detections, displaySize);
     const ctx = canvas.getContext('2d');
@@ -815,6 +915,7 @@ async function scanGroup() {
     resized.forEach(det => {
       const box = det.detection.box;
       let label = 'Неизвестный', color = '#f43f5e', conf = '';
+      
       if (matcher) {
         const best = matcher.findBestMatch(det.descriptor);
         if (best.label !== 'unknown') {
@@ -826,6 +927,7 @@ async function scanGroup() {
           }
         }
       }
+      
       ctx.strokeStyle = color; ctx.lineWidth = 3;
       ctx.strokeRect(box.x, box.y, box.width, box.height);
       const text = `${label}${conf}`;
@@ -987,7 +1089,6 @@ function exportXLSX(rows, filename, widths) {
   XLSX.writeFile(wb, filename);
 }
 
-/* 👇 НОВЫЙ ФОРМАТ ДЛЯ РАСПОЗНАВАНИЯ (ФИО + СЕГОДНЯШНЯЯ ДАТА) 👇 */
 function exportCurrentExcel() {
   if (!currentSession) { alert('Нет активной проверки'); return; }
   if (!classmates.length) { alert('База пуста'); return; }
@@ -1014,7 +1115,6 @@ function exportCurrentExcel() {
   exportXLSX(rows, `табель_${formatDateForFile(currentSession.timestamp)}.xlsx`, widths);
 }
 
-/* Экспорт для истории (списком) */
 function exportSessionExcel(sessionId) {
   const s = historyCache.find(x => x.id === sessionId);
   if (!s) { alert('Сессия не найдена'); return; }
